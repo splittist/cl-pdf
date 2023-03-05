@@ -135,6 +135,8 @@
 
 ;;; PDF Basic objects (see Chapter 4)
 
+(defparameter *contentp* nil "Are we reading from a content stream?")
+
 (defun read-object (&optional (eof-error-p t))
   "Returns one of the following PDF objects: boolean (:true or :false),
 number (Lisp number), string (Lisp string), name (Lisp symbol in the PDF
@@ -160,22 +162,21 @@ package), array (Lisp vector), dictionary (Lisp property list), stream
              (if (char= next-char #\<)
                  (progn (eat-char #\<)
                    (read-dictionary-or-stream))
-               (read-hex-string))))
-          ((eql char #\t)
-           (eat-chars "true")
-           "true")
-          ((eql char #\f)
-           (eat-chars "false")
-           "false")
-          ((eql char #\n)
-           (eat-chars "null")
-           nil)
-          ((eql char #\e)
-           ;; this is probably an empty indirect object.  WRITE-OBJECT
-           ;; can write them, so we should be able to read them too.
-           nil)
-          (t (unexpected-character-error char)))))
-
+		 (read-hex-string))))
+	  ((and *contentp* (null char))
+	   :eof)
+	  (t (let ((token (read-name t)))
+	       (cond
+		 (*contentp*
+		  token)
+		 ((string= "true" token)
+		  "true")
+		 ((string= "false" token)
+		  "false")
+		 ((string= "null" token)
+		  nil)
+		 (t (unexpected-character-error (char token 0)))))))))
+		   
 (defun read-number ()
   (read-from-string
    (with-output-to-string (s)
@@ -226,18 +227,39 @@ package), array (Lisp vector), dictionary (Lisp property list), stream
 
 ;;; Names
 
-(defun read-name ()
-  (with-output-to-string (name)
-    (write-char #\/ name)
-    (loop (let ((char (read-char *pdf-input-stream* nil nil)))
-	    (cond ((null char) (return))
-		  ((eql char #\#)
-                   (write-char (code-char (+ (ash (read-hex-digit) 4)
-                                             (read-hex-digit)))
-                               name))
-		  ((name-char-p char) (write-char char name))
-		  (t (unread-char char *pdf-input-stream*)
-		     (return)))))))
+(defun make-name (string)
+  (intern string :pdf))
+
+(defun read-name (&optional operatorp)
+  (let ((name
+	  (with-output-to-string (name)
+	    (unless operatorp
+	      (write-char #\/ name))
+	    (loop (let ((char (read-char *pdf-input-stream* nil nil)))
+		    (cond ((null char) (return))
+			  ((eql char #\#)
+			   (write-char (code-char (+ (ash (read-hex-digit) 4)
+						     (read-hex-digit)))
+				       name))
+			  ((name-char-p char) (write-char char name))
+			  (t (unread-char char *pdf-input-stream*)
+			     (return))))))))
+    (cond
+      ((and *contentp* operatorp)
+       (cond
+	 ((string= "true" name)
+	  :true)
+	 ((string= "false" name)
+	  :false)
+	 ((string= "null" name)
+	  nil)
+	 (t
+	  (or (gethash name *content-stream-operators*)
+	      (make-instance 'unknown-operator :name name)))))
+      (*contentp*
+       (make-name name))
+      (t
+       name))))
 
 ;;; Arrays
 
@@ -437,7 +459,7 @@ Returns the first unused object-number."
     (load-all-indirect-objects)
     (let ((root-page-node
            (change-class (get-dict-value (content (catalog *document*)) "/Pages")
-                         'page-node))
+                          'page-node))
 	  (pages-vector (make-array 1 :fill-pointer 0 :adjustable t)))
       (collect-pages root-page-node pages-vector root-page-node)
       (setf (pages root-page-node) pages-vector)

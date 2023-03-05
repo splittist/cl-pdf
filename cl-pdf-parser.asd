@@ -9,5 +9,6 @@
   :description "PDF parser"
   :long-description "PDF parser"
   :components ((:file "pdf-parser" :depends-on ())
-               (:file "pdf-template" :depends-on ("pdf-parser")))
+               (:file "pdf-template" :depends-on ("pdf-parser"))
+	       (:file "extra" :depends-on ("pdf-parser")))
   :depends-on (:cl-pdf))
